@@ -26,14 +26,21 @@ async def canal_autorizado(ctx):
     return ctx.channel.id == ID_CHANNEL
 
 @bot.command()
+@commands.cooldown(1, 600, commands.BucketType.guild)  # 1 uso a cada 600 segundos (10 minutos) por servidor
 async def reiniciar(ctx):
-    await ctx.send("🔄 Reiniciando servidor...")
+    usuario = ctx.author.display_name
+    await ctx.send(f"🔄 {usuario} está reiniciando o servidor...")
 
     resposta_save = reiniciar_servidor(URL)
     if resposta_save:
         await ctx.send("✅ Servidor reiniciado com sucesso!")
     else:
         await ctx.send("❌ Erro ao reiniciar o servidor.")
+
+@reiniciar.error
+async def reiniciar_error(ctx, error):
+    if isinstance(error, commands.CommandOnCooldown):
+        await ctx.send(f"⏳ Calma! Este comando só pode ser usado novamente em {round(error.retry_after)} segundos.")
 
 @bot.command()
 async def chuva(ctx):
