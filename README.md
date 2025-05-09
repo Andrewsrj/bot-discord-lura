@@ -44,6 +44,7 @@ Crie um arquivo `.env` com o seguinte conteúdo:
 ```env
 DISCORD_TOKEN=seu_token_discord_aqui
 URL=https://painel.lurahosting.com.br/server/<id_do_servidor>/
+ID_CHANNEL=<id_do_canal>
 ```
 
 ---
