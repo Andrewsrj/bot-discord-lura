@@ -1,6 +1,6 @@
 # 🤖 Bot Discord com Controle de Painel via Navegador
 
-Este projeto é um bot de Discord que automatiza ações em um painel web (como reiniciar um servidor) utilizando um navegador **Google Chrome real** com login manual. Ele evita bloqueios de Cloudflare ao se conectar a uma sessão já aberta e autenticada.
+Este projeto é um bot de Discord que automatiza ações em um painel web (como reiniciar um servidor) utilizando um navegador **Google Chrome real** com login manual. Ele evita bloqueios de Cloudflare ao se conectar a uma sessão já aberta e autenticada. Além disso, o bot agora pode entrar em canais de voz e tocar áudios de vídeos do YouTube.
 
 ---
 
@@ -8,6 +8,7 @@ Este projeto é um bot de Discord que automatiza ações em um painel web (como 
 
 - Python 3.8+
 - Google Chrome instalado
+- FFmpeg instalado e adicionado ao PATH do Windows
 - pip + ambiente virtual
 
 ---
@@ -34,6 +35,13 @@ venv\Scripts\activate   # Windows
 ```bash
 pip install -r requirements.txt
 ```
+
+4. Instale o FFmpeg e adicione ao PATH do Windows:
+
+- Baixe em: https://www.gyan.dev/ffmpeg/builds/
+- Extraia o conteúdo em `C:\ffmpeg`
+- Adicione `C:\ffmpeg\bin` ao **PATH do Windows**
+- Feche e abra o terminal novamente para validar com `ffmpeg -version`
 
 ---
 
@@ -85,7 +93,7 @@ Você verá algo como:
 
 ```
 🤖 Bot conectado como PainelBot#1234
-✅ Conectado ao navegador já aberto.
+✅ Navegador iniciado com sucesso.
 🧠 Pronto para receber comandos.
 ```
 
@@ -93,8 +101,8 @@ Você verá algo como:
 
 ## 💬 Comandos disponíveis
 
-- `!chuva` → mensagem divertida com emojis
-- `!reiniciar` → clica no botão de reiniciar do painel
+- `!chuva` → Entra em um canal de voz ocupado e toca um áudio divertido, além de enviar uma mensagem com emojis
+- `!reiniciar` → Clica no botão de reiniciar do painel, limitado a cada 10 minutos
 
 ---
 
@@ -108,8 +116,8 @@ Ao encerrar o bot, o navegador permanecerá aberto (você pode fechar manualment
 
 - O Chrome **deve ser iniciado com `--remote-debugging-port`** sempre que quiser usar o bot
 - O Selenium **não conseguirá automatizar logins protegidos por captcha/Cloudflare** — por isso usamos essa abordagem
+- FFmpeg deve estar instalado e funcionando no PATH para que o bot possa tocar áudios
+- O bot gerencia cache de áudio para evitar downloads repetidos
 - Esse método **não usa `headless`** justamente para permitir controle humano inicial
 
 ---
-
-Você pode adaptar o XPATH para o botão do seu painel!
