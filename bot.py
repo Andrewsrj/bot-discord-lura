@@ -4,10 +4,10 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from utils.navegador import iniciar_navegador, reiniciar_servidor
 
-# CANAL_ID = 123456789012345678  # Substitua pelo ID do canal desejado
-ID_CHANNEL = os.getenv("ID_CHANNEL")
 
 load_dotenv()
+# CANAL_ID = 123456789012345678  # Substitua pelo ID do canal desejado
+ID_CHANNEL = int(os.getenv("ID_CHANNEL"))
 TOKEN = os.getenv("DISCORD_TOKEN")
 URL = os.getenv("URL")
 
@@ -18,7 +18,10 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 @bot.event
 async def on_ready():
     print(f"🤖 Bot conectado como {bot.user}")
-    iniciar_navegador()  # ← inicia o Chrome assim que o bot sobe (Faça o login manualmente)
+    if iniciar_navegador():  # ← inicia o Chrome assim que o bot sobe (Faça o login manualmente)
+        print("✅ Navegador iniciado com sucesso.")
+    else:
+        print("❌ Erro ao conectar ao navegador.")
     print("🧠 Pronto para receber comandos.")
 
 @bot.check
