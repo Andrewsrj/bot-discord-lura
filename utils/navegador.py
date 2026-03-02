@@ -54,6 +54,3 @@ def reiniciar_servidor(url):
 
 def get_driver():
     return driver_global
-
-if __name__ == "__main__":
-    iniciar_navegador()
