@@ -2,17 +2,18 @@ import os
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
-from utils.navegador import iniciar_navegador, reiniciar_servidor
+from utils.navegador import reiniciar_servidor
 from discord import FFmpegPCMAudio
 from yt_dlp import YoutubeDL
 import asyncio
 import random
 import requests
 from bs4 import BeautifulSoup
+from collections import defaultdict
 
 
 # =====================================================
-#   CARREGAR VARIÁVEIS DE AMBIENTE
+#   CARREGAR VARIAVEIS DE AMBIENTE
 # =====================================================
 load_dotenv()
 
@@ -25,24 +26,26 @@ BASE_URL = "https://www.myinstants.com"
 
 
 # =====================================================
-#   CONFIGURAÇÃO DO BOT
+#   CONFIGURACAO DO BOT
 # =====================================================
 intents = discord.Intents.default()
 intents.message_content = True
+intents.voice_states = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+guild_voice_locks = defaultdict(asyncio.Lock)
 
 
 # =====================================================
-#   EVENTO DE INICIALIZAÇÃO
+#   EVENTO DE INICIALIZACAO
 # =====================================================
 @bot.event
 async def on_ready():
-    print(f"🤖 Bot conectado como {bot.user}")
-    print("🧠 Pronto para receber comandos.")
+    print(f"Bot conectado como {bot.user}")
+    print("Pronto para receber comandos.")
 
 
 # =====================================================
-#   LIMITE: o bot só responde no canal configurado
+#   LIMITE: o bot so responde no canal configurado
 # =====================================================
 @bot.check
 async def canal_autorizado(ctx):
@@ -50,37 +53,107 @@ async def canal_autorizado(ctx):
 
 
 # =====================================================
-#   FUNÇÃO DE CONEXÃO SEGURA AO CANAL DE VOZ
+#   AUXILIARES DE VOZ
 # =====================================================
+def channel_has_human_member(channel):
+    return any(not member.bot for member in channel.members)
+
+
+def select_target_voice_channel(ctx):
+    # Prioriza o canal do autor se tiver pelo menos 1 pessoa real.
+    if ctx.author.voice and ctx.author.voice.channel:
+        if channel_has_human_member(ctx.author.voice.channel):
+            return ctx.author.voice.channel
+
+    # Caso contrario, usa o primeiro canal ocupado por pessoa real.
+    return next(
+        (channel for channel in ctx.guild.voice_channels if channel_has_human_member(channel)),
+        None,
+    )
+
+
+async def disconnect_voice_client(voice_client):
+    if not voice_client:
+        return
+
+    try:
+        if voice_client.is_playing():
+            voice_client.stop()
+        if voice_client.is_connected():
+            await voice_client.disconnect(force=True)
+    except Exception as error:
+        print(f"[Voice] Erro ao desconectar: {error}")
+
+
 async def connect_voice_safely(ctx, channel):
-    vc = ctx.guild.voice_client
+    voice_client = ctx.guild.voice_client
 
-    # Já está no canal certo → usar a mesma conexão
-    if vc and vc.is_connected() and vc.channel == channel:
-        return vc
+    if voice_client and voice_client.is_connected() and voice_client.channel == channel:
+        return voice_client
 
-    # Está conectado em outro canal → desconectar primeiro
-    if vc and vc.is_connected():
+    if voice_client and voice_client.is_connected():
+        await disconnect_voice_client(voice_client)
+
+        # Espera rapida para limpar estado interno da conexao de voz.
+        for _ in range(15):
+            current = ctx.guild.voice_client
+            if not current or not current.is_connected():
+                break
+            await asyncio.sleep(0.2)
+
+        await asyncio.sleep(0.8)
+
+    for attempt in range(3):
         try:
-            await vc.disconnect(force=True)
-        except:
-            pass
-        await asyncio.sleep(0.7)  # necessário para Discord limpar o estado
-
-    # Tentar conectar com retry
-    for tentativa in range(3):
-        try:
-            new_vc = await channel.connect(timeout=10, reconnect=True)
-            return new_vc
-        except Exception as e:
-            print(f"[Voice] Erro ao conectar (tentativa {tentativa+1}): {e}")
-            await asyncio.sleep(1.5)
+            return await channel.connect(timeout=15, reconnect=False, self_deaf=True)
+        except Exception as error:
+            print(f"[Voice] Erro ao conectar (tentativa {attempt + 1}/3): {error}")
+            await asyncio.sleep(2 + attempt)
 
     return None
 
 
+async def tocar_audio_em_canal(ctx, caminho, titulo=None):
+    channel = select_target_voice_channel(ctx)
+    if not channel:
+        await ctx.send("Nenhum canal de voz com pessoas foi encontrado.")
+        return
+
+    async with guild_voice_locks[ctx.guild.id]:
+        voice_client = await connect_voice_safely(ctx, channel)
+        if not voice_client:
+            await ctx.send("Nao consegui conectar ao canal de voz.")
+            return
+
+        if titulo:
+            await ctx.send(f"Tocando: **{titulo}** no canal `{channel.name}`")
+        else:
+            await ctx.send(f"Tocando no canal de voz: `{channel.name}`")
+
+        finished = asyncio.Event()
+
+        def after_playback(error):
+            if error:
+                print(f"[Voice] Erro durante reproducao: {error}")
+            bot.loop.call_soon_threadsafe(finished.set)
+
+        try:
+            try:
+                source = FFmpegPCMAudio(caminho)
+            except Exception:
+                source = FFmpegPCMAudio(caminho, executable="C:/ffmpeg/bin/ffmpeg.exe")
+
+            voice_client.play(source, after=after_playback)
+            await finished.wait()
+        except Exception as error:
+            print(f"[Voice] Falha ao tocar audio: {error}")
+            await ctx.send("Erro ao reproduzir o audio.")
+        finally:
+            await disconnect_voice_client(voice_client)
+
+
 # =====================================================
-#   PEGAR ÁUDIO ALEATÓRIO DO MYINSTANTS
+#   PEGAR AUDIO ALEATORIO DO MYINSTANTS
 # =====================================================
 async def pegar_audio_aleatorio_myinstants():
     lista_url = f"{BASE_URL}/pt/index/br/"
@@ -88,7 +161,7 @@ async def pegar_audio_aleatorio_myinstants():
 
     resp = requests.get(lista_url, headers=headers, timeout=10)
     if resp.status_code != 200:
-        print("Erro ao baixar página de lista:", resp.status_code)
+        print("Erro ao baixar pagina de lista:", resp.status_code)
         return None, None
 
     soup = BeautifulSoup(resp.text, "html.parser")
@@ -110,14 +183,14 @@ async def pegar_audio_aleatorio_myinstants():
     link_pagina = BASE_URL + escolhido["href"]
     titulo = escolhido.get_text(strip=True)
 
-    # Abrir página do áudio
+    # Abrir pagina do audio
     resp_audio = requests.get(link_pagina, headers=headers, timeout=10)
     if resp_audio.status_code != 200:
         return None, None
 
     soup_audio = BeautifulSoup(resp_audio.text, "html.parser")
 
-    # 1 — Procurar link "Baixar MP3"
+    # 1 - Procurar link "Baixar MP3"
     for a in soup_audio.find_all("a", href=True):
         texto = a.get_text(strip=True)
         if "Baixar MP3" in texto:
@@ -125,7 +198,7 @@ async def pegar_audio_aleatorio_myinstants():
             mp3_url = href_mp3 if href_mp3.startswith("http") else BASE_URL + href_mp3
             return mp3_url, titulo
 
-    # 2 — Procurar player dentro do iframe
+    # 2 - Procurar player dentro do iframe
     iframe = soup_audio.find("iframe", src=True)
     if iframe:
         embed_url = iframe["src"]
@@ -143,78 +216,40 @@ async def pegar_audio_aleatorio_myinstants():
                 mp3_url = src if src.startswith("http") else BASE_URL + src
                 return mp3_url, titulo
 
-    print("Não foi possível encontrar o MP3 para:", link_pagina)
+    print("Nao foi possivel encontrar o MP3 para:", link_pagina)
     return None, None
 
 
-# Criar diretório de cache de áudio
+# Criar diretorio de cache de audio
 os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
 
 
 # =====================================================
-#   FUNÇÃO PARA TOCAR ÁUDIO (GENÉRICA)
-# =====================================================
-async def tocar_audio_em_canal(ctx, caminho, titulo=None):
-    canal_com_membros = next((c for c in ctx.guild.voice_channels if c.members), None)
-
-    if not canal_com_membros:
-        await ctx.send("❌ Nenhum canal de voz ocupado foi encontrado.")
-        return
-
-    voice_client = await connect_voice_safely(ctx, canal_com_membros)
-    if not voice_client:
-        await ctx.send("❌ Não consegui conectar ao canal de voz.")
-        return
-
-    if titulo:
-        await ctx.send(f"🔊 **Tocando:** {titulo}\n🎵 No canal: `{canal_com_membros.name}`")
-    else:
-        await ctx.send(f"🎵 Tocando no canal de voz: {canal_com_membros.name}")
-
-    # Tocar áudio com FFmpeg
-    try:
-        source = FFmpegPCMAudio(caminho)
-        voice_client.play(source)
-    except:
-        try:
-            source = FFmpegPCMAudio(caminho, executable="C:/ffmpeg/bin/ffmpeg.exe")
-            voice_client.play(source)
-        except Exception:
-            await ctx.send("❌ FFmpeg não encontrado.")
-            return
-
-    while voice_client.is_playing():
-        await asyncio.sleep(1)
-
-    await voice_client.disconnect()
-
-
-# =====================================================
-#   COMANDO: !audio → busca do MyInstants
+#   COMANDO: !audio -> busca do MyInstants
 # =====================================================
 @bot.command()
 async def audio(ctx):
-    if ctx.voice_client and ctx.voice_client.is_connected():
-        await ctx.send("❌ Já estou tocando em outro canal.")
+    if ctx.voice_client and ctx.voice_client.is_connected() and ctx.voice_client.is_playing():
+        await ctx.send("Ja estou tocando em outro canal.")
         return
 
     usuario = ctx.author.display_name
     await ctx.send(
-        f"🧠 *Buscando aqui na minha base de dados um áudio que represente* **{usuario}**..."
+        f"Buscando aqui na minha base de dados um audio que represente **{usuario}**..."
     )
 
     mp3_url, titulo = await pegar_audio_aleatorio_myinstants()
     if not mp3_url:
-        await ctx.send("❌ Não consegui buscar um áudio aleatório.")
+        await ctx.send("Nao consegui buscar um audio aleatorio.")
         return
 
     caminho = os.path.join(AUDIO_CACHE_DIR, "random_temp.mp3")
     try:
-        r = requests.get(mp3_url)
+        r = requests.get(mp3_url, timeout=20)
         with open(caminho, "wb") as f:
             f.write(r.content)
-    except:
-        await ctx.send("❌ Erro ao baixar o áudio.")
+    except Exception:
+        await ctx.send("Erro ao baixar o audio.")
         return
 
     await tocar_audio_em_canal(ctx, caminho, titulo)
@@ -226,15 +261,14 @@ async def audio(ctx):
 @bot.command()
 async def chuva(ctx):
     mensagem = (
-        "🌧️🎶 *Chuva de arroz, rosas no buquê...* 💐🎶\n"
-        "✨ Que essa vibe boa contagie o servidor! ✨\n"
-        "💍💒💃🕺"
+        "Chuva de arroz, rosas no buque...\n"
+        "Que essa vibe boa contagie o servidor!"
     )
     url = "https://youtube.com/shorts/jvGETIIk_E0?si=Jh_5Sx6jS8YJobFX"
 
     caminho = os.path.join(AUDIO_CACHE_DIR, AUDIO_FILENAME)
 
-    # Baixar se ainda não existe
+    # Baixar se ainda nao existe
     if not os.path.exists(caminho):
         ydl_opts = {
             "format": "bestaudio/best",
@@ -244,29 +278,8 @@ async def chuva(ctx):
         with YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
-    canal_com_membros = next((c for c in ctx.guild.voice_channels if c.members), None)
-    if not canal_com_membros:
-        await ctx.send("❌ Nenhum canal de voz ocupado.")
-        return
-
-    voice_client = await connect_voice_safely(ctx, canal_com_membros)
-    if not voice_client:
-        await ctx.send("❌ Erro ao conectar ao canal.")
-        return
-
-    await ctx.send(f"🎵 Tocando CHUVA no canal `{canal_com_membros.name}`\n{mensagem}")
-
-    try:
-        source = FFmpegPCMAudio(caminho)
-        voice_client.play(source)
-    except:
-        await ctx.send("❌ Erro ao usar FFmpeg.")
-        return
-
-    while voice_client.is_playing():
-        await asyncio.sleep(1)
-
-    await voice_client.disconnect()
+    await ctx.send(mensagem)
+    await tocar_audio_em_canal(ctx, caminho, titulo="CHUVA")
 
 
 # =====================================================
@@ -276,19 +289,19 @@ async def chuva(ctx):
 @commands.cooldown(1, 600, commands.BucketType.guild)
 async def reiniciar(ctx):
     usuario = ctx.author.display_name
-    await ctx.send(f"🔄 {usuario} está reiniciando o servidor...")
+    await ctx.send(f"{usuario} esta reiniciando o servidor...")
 
     if reiniciar_servidor(URL):
-        await ctx.send("✅ Servidor reiniciado com sucesso!")
+        await ctx.send("Servidor reiniciado com sucesso!")
     else:
-        await ctx.send("❌ Erro ao reiniciar o servidor.")
+        await ctx.send("Erro ao reiniciar o servidor.")
 
 
 @reiniciar.error
 async def reiniciar_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
         await ctx.send(
-            f"⏳ Calma! Este comando só pode ser usado novamente em {round(error.retry_after)} segundos."
+            f"Calma! Este comando so pode ser usado novamente em {round(error.retry_after)} segundos."
         )
 
 
