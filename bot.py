@@ -23,6 +23,7 @@ URL = os.getenv("URL")
 AUDIO_CACHE_DIR = "audio_cache"
 AUDIO_FILENAME = "chuva.mp3"
 BASE_URL = "https://www.myinstants.com"
+MIN_DISCORD_PY_VOICE_VERSION = (2, 6, 0)
 
 
 # =====================================================
@@ -42,6 +43,9 @@ guild_voice_locks = defaultdict(asyncio.Lock)
 async def on_ready():
     print(f"Bot conectado como {bot.user}")
     print("Pronto para receber comandos.")
+    dependency_issue = get_voice_dependency_issue()
+    if dependency_issue:
+        print(f"[Voice] {dependency_issue}")
 
 
 # =====================================================
@@ -57,6 +61,41 @@ async def canal_autorizado(ctx):
 # =====================================================
 def channel_has_human_member(channel):
     return any(not member.bot for member in channel.members)
+
+
+def get_discord_version_tuple():
+    version_info = getattr(discord, "version_info", None)
+    if version_info is not None:
+        return (version_info.major, version_info.minor, version_info.micro)
+
+    parts = []
+    for raw_part in discord.__version__.split("."):
+        digits = "".join(char for char in raw_part if char.isdigit())
+        if not digits:
+            break
+        parts.append(int(digits))
+        if len(parts) == 3:
+            break
+
+    while len(parts) < 3:
+        parts.append(0)
+
+    return tuple(parts)
+
+
+def is_voice_library_compatible():
+    return get_discord_version_tuple() >= MIN_DISCORD_PY_VOICE_VERSION
+
+
+def get_voice_dependency_issue():
+    if is_voice_library_compatible():
+        return None
+
+    return (
+        f"discord.py {discord.__version__} tem um bug conhecido de voz que pode gerar "
+        "o erro 4006. Atualize para discord.py[voice]>=2.6.0 no mesmo Python usado "
+        "para executar o bot."
+    )
 
 
 def select_target_voice_channel(ctx):
@@ -80,7 +119,7 @@ async def disconnect_voice_client(voice_client):
         if voice_client.is_playing():
             voice_client.stop()
         if voice_client.is_connected():
-            await voice_client.disconnect(force=True)
+            await voice_client.disconnect()
     except Exception as error:
         print(f"[Voice] Erro ao desconectar: {error}")
 
@@ -92,20 +131,19 @@ async def connect_voice_safely(ctx, channel):
         return voice_client
 
     if voice_client and voice_client.is_connected():
-        await disconnect_voice_client(voice_client)
-
-        # Espera rapida para limpar estado interno da conexao de voz.
-        for _ in range(15):
+        try:
+            await voice_client.move_to(channel, timeout=15)
             current = ctx.guild.voice_client
-            if not current or not current.is_connected():
-                break
-            await asyncio.sleep(0.2)
-
-        await asyncio.sleep(0.8)
+            if current and current.is_connected() and current.channel == channel:
+                return current
+        except Exception as error:
+            print(f"[Voice] Erro ao mover canal: {error}")
+            await disconnect_voice_client(voice_client)
+            await asyncio.sleep(1)
 
     for attempt in range(3):
         try:
-            return await channel.connect(timeout=15, reconnect=False, self_deaf=True)
+            return await channel.connect(timeout=15, reconnect=True, self_deaf=True)
         except Exception as error:
             print(f"[Voice] Erro ao conectar (tentativa {attempt + 1}/3): {error}")
             await asyncio.sleep(2 + attempt)
@@ -114,6 +152,11 @@ async def connect_voice_safely(ctx, channel):
 
 
 async def tocar_audio_em_canal(ctx, caminho, titulo=None):
+    dependency_issue = get_voice_dependency_issue()
+    if dependency_issue:
+        await ctx.send(dependency_issue)
+        return
+
     channel = select_target_voice_channel(ctx)
     if not channel:
         await ctx.send("Nenhum canal de voz com pessoas foi encontrado.")
@@ -308,4 +351,5 @@ async def reiniciar_error(ctx, error):
 # =====================================================
 #   EXECUTAR BOT
 # =====================================================
-bot.run(TOKEN)
+if __name__ == "__main__":
+    bot.run(TOKEN)
